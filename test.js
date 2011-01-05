@@ -4,7 +4,7 @@ var overrides = {
   group: "wheel"
 };
 var tape = new Tar();
-tape.addDirectory('./usr', overrides, function (err) {
+tape.addDirectory('./test', overrides, function (err) {
   if (err) { throw err; }
   tape.close();
 });

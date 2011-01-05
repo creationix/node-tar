@@ -89,7 +89,7 @@ Tar.prototype.append = function (path, o) {
   this.busy = true;
   var tape = this;
 
-  fs.stat(path, function (err, stat) {
+  fs.lstat(path, function (err, stat) {
     if (err) { return tape.emit('error', err); }
     try {
       if (stat.isDirectory()) {
@@ -104,36 +104,47 @@ Tar.prototype.append = function (path, o) {
         fileSize: pad(o.fileSize || (stat.isFile() ? stat.size : 0), 11),
         mtime: pad(o.mtime || stat.mtime.getTime() / 1000 >> 0, 11),
         checksum: "        ",
-        type: stat.isDirectory() ? "5" : stat.isFile() ? "0" : new Error(),
+        type: stat.isDirectory() ? "5" : (stat.isSymbolicLink() ? "2" : (stat.isFile() ? "0" : new Error())),
         ustar: "ustar  ",
         owner: o.owner || "",
         group: o.group || ""
       };
-      var checksum = 0;
-      forEach(data, function (value) {
-        for (var i = 0, l = value.length; i < l; i++) {
-          //console.log(value.charCodeAt(i));
-          checksum += value.charCodeAt(i);
-        }
-      });
-      data.checksum = pad(checksum, 6) + "\u0000 ";
-      tape.emit('data', formatHeader(data));
-      if (stat.isFile()) {
-        var written = 0;
-        var input = fs.createReadStream(path);
-        input.on('data', function (chunk) {
-          written += chunk.length;
-          tape.emit('data', chunk);
+      function finish() {
+        var checksum = 0;
+        forEach(data, function (value) {
+          for (var i = 0, l = value.length; i < l; i++) {
+            //console.log(value.charCodeAt(i));
+            checksum += value.charCodeAt(i);
+          }
         });
-        input.on('error', function (err) {
-          tape.emit('error', err);
-        });
-        input.on('end', function () {
-          tape.emit('data', clean(512 - (written % 512)));
+        data.checksum = pad(checksum, 6) + "\u0000 ";
+        tape.emit('data', formatHeader(data));
+        if (stat.isFile()) {
+          var written = 0;
+          var input = fs.createReadStream(path);
+          input.on('data', function (chunk) {
+            written += chunk.length;
+            tape.emit('data', chunk);
+          });
+          input.on('error', function (err) {
+            tape.emit('error', err);
+          });
+          input.on('end', function () {
+            tape.emit('data', clean(512 - (written % 512)));
+            tape.checkQueue();
+          });
+        } else {
           tape.checkQueue();
+        }
+      }
+      if (stat.isSymbolicLink()) {
+        fs.readlink(path, function (err, resolvedPath) {
+          if (err) { return tape.emit('error', err); }
+          data.linkName = resolvedPath;  
+          finish();
         });
       } else {
-        tape.checkQueue();
+        finish();
       }
     } catch (err2) {
       tape.emit('error', err2);
@@ -147,7 +158,7 @@ Tar.prototype.addDirectory = function (path, overrides, callback) {
     var counter = filenames.length;
     filenames.forEach(function (filename) {
       var fullPath = path + "/" + filename;
-      fs.stat(fullPath, function (err, stat) {
+      fs.lstat(fullPath, function (err, stat) {
         if (err) { return callback(err); }
         tape.append(fullPath, overrides);
         if (stat.isDirectory()) {
